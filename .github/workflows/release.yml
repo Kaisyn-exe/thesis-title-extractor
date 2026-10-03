@@ -24,15 +24,27 @@ jobs:
           workspaces: "./src-tauri -> target"
       - run: npm ci
       - run: npm test
+      # 从 CHANGELOG.md 取出本版本那一节，作为 Release 页面的说明
+      - name: Release notes from CHANGELOG
+        id: notes
+        shell: bash
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          notes=$(awk -v v="$ver" 'index($0, "## [" v "]") == 1 {f=1; next} /^## \[/ {f=0} f' CHANGELOG.md)
+          {
+            echo "body<<NOTES_EOF"
+            echo "下载 \`thesis-title-extractor_*_x64-setup.exe\` 双击安装即可（推荐）；\`*.msi\` 适合机房统一部署。支持 Windows 10 / 11。"
+            echo
+            echo "$notes"
+            echo "NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "论文题目提取工具 ${{ github.ref_name }}"
-          releaseBody: |
-            下载 `*_x64-setup.exe` 双击安装即可（推荐）；`*.msi` 适合机房统一部署。
-            支持 Windows 10 / 11。
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: false
       # GitHub 的附件文件名不支持中文（「论文题目提取工具_…」会变成「_…」），
       # 改成英文文件名，再用中文作为下载页上的显示名称

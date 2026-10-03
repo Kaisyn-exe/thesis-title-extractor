@@ -1,6 +1,6 @@
 [package]
 name = "thesis-title-extractor"
-version = "1.0.0"
+version = "1.0.1"
 description = "批量提取论文 PDF 的题目、姓名、学号与封面"
 authors = []
 edition = "2021"

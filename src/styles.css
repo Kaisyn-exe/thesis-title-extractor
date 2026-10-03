@@ -14,6 +14,8 @@
   --g: #217346;
   --g-strong: #185c37;
   --g-btn: #217346;
+  --g-btn-hover: #1a5f3a;
+  --g-btn-active: #144a2d;
   --g-soft: #e5f1ea;
   --g-ring: rgba(33, 115, 70, 0.22);
   --row-sel: #e9f3ed;
@@ -45,6 +47,8 @@
   --g: #4cbb7f;
   --g-strong: #6fd09b;
   --g-btn: #2f8a57;
+  --g-btn-hover: #37a065;
+  --g-btn-active: #287a4c;
   --g-soft: #1f3529;
   --g-ring: rgba(76, 187, 127, 0.3);
   --row-sel: #233229;
@@ -97,8 +101,10 @@ svg { flex-shrink: 0; }
   white-space: nowrap;
 }
 .btn:hover:not(:disabled) { background: var(--hover); }
+/* 主按钮的悬停/按下必须写全选择器，否则会被上面普通按钮的浅灰悬停色盖掉，白字就看不见了 */
 .btn.primary { background: var(--g-btn); border-color: var(--g-btn); color: #fff; font-weight: 600; }
-.btn.primary:hover:not(:disabled) { filter: brightness(1.08); }
+.btn.primary:hover:not(:disabled) { background: var(--g-btn-hover); border-color: var(--g-btn-hover); }
+.btn.primary:active:not(:disabled) { background: var(--g-btn-active); border-color: var(--g-btn-active); }
 .btn.large { height: 42px; padding: 0 28px; font-size: 15px; }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
