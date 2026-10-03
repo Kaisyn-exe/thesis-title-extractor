@@ -34,6 +34,9 @@ describe("extract", () => {
       name: "王五",
       studentId: "2210000001",
       advisor: "赵老师",
+      advisorTitle: "副教授",
+      college: "经济与工商管理学院",
+      major: "2022级国际经济与贸易",
     });
   });
 
@@ -89,6 +92,8 @@ describe("扫描件 OCR", () => {
       name: "钱七",
       studentId: "2210000003",
       advisor: "孙老师",
+      advisorTitle: "讲师",
+      college: "经济与工商管理学院",
     });
     expect(needsCheck(r)).toBe(true);
   });
@@ -111,6 +116,9 @@ describe("parseFileName", () => {
       studentId: "2210000009",
       name: "周九",
     });
+  });
+  it("没有分隔符的文件名不当作姓名", () => {
+    expect(parseFileName("扫描件样例.pdf")).toMatchObject({ name: "", title: "扫描件样例" });
   });
   it("题目_姓名", () => {
     expect(parseFileName("乡村振兴研究_李雷.pdf")).toEqual({

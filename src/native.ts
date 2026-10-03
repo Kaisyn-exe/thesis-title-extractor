@@ -1,8 +1,18 @@
 /** 对 Rust 端命令的封装（见 src-tauri/src/lib.rs）。 */
 import { invoke } from "@tauri-apps/api/core";
 
+export interface PdfEntry {
+  path: string;
+  size: number;
+  /** 修改时间（毫秒） */
+  mtime: number;
+}
+
 export const collectPdfs = (paths: string[], recursive: boolean) =>
-  invoke<string[]>("collect_pdfs", { paths, recursive });
+  invoke<PdfEntry[]>("collect_pdfs", { paths, recursive });
+
+/** 重命名；目标已存在时 Rust 端会拒绝，不会覆盖 */
+export const renameFile = (from: string, to: string) => invoke<void>("rename_file", { from, to });
 
 export const isDir = (path: string) => invoke<boolean>("is_dir", { path });
 

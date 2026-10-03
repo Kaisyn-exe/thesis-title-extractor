@@ -1,18 +1,35 @@
 import "./styles.css";
+import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { buildExcel, exportCoverImages, exportCoverPdf, type PaperRecord } from "./exporters";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import {
+  buildExcel, DEFAULT_EXCEL_OPTIONS, EXCEL_COLUMNS, exportCoverImages, exportCoverPdf,
+  type ExcelOptions, type PaperRecord, type SortKey,
+} from "./exporters";
 import { extract, Method, needsCheck } from "./extractor";
-import { basename, collectPdfs, dirname, isDir, joinPath, openPath, readFile, revealPath, writeFile } from "./native";
+import { basename, collectPdfs, dirname, isDir, joinPath, openPath, readFile, renameFile, revealPath, writeFile } from "./native";
 import { ocrPage } from "./ocr";
 import { loadPdf, renderCover } from "./pdf";
+import { loadProgress, pickFields, sameFields, saveProgress, type EditField, type Fields } from "./progress";
+import { DEFAULT_PATTERN, planRenames, TOKENS } from "./rename";
+import { matchRoster, parseRoster, type Student } from "./roster";
+import { checkForUpdate, RELEASES_URL } from "./update";
 
-type Paper = PaperRecord & { id: number; state: "pending" | "done" | "error" };
+type Paper = PaperRecord & {
+  id: number;
+  state: "pending" | "done" | "error";
+  size: number;
+  mtime: number;
+  /** 自动识别出的原始结果，用来判断老师改过什么、以及「放弃修改」 */
+  auto?: Fields & { method: string };
+  restored?: boolean;
+};
 type Filter = "all" | "check" | "done";
 type View = "table" | "gallery";
-type Opt = "recursive" | "ocr";
-type EditKey = "title" | "name" | "studentId" | "advisor";
+type Opt = "recursive" | "ocr" | "autoUpdate";
+type EditKey = EditField;
 type Status = "pending" | "err" | "manual" | "warn" | "ok";
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector(sel) as T;
@@ -46,6 +63,9 @@ const ui = {
   hint: $("#hint"),
   optionsPop: $("#options-pop"),
   themeLabel: $("#theme-label"),
+  saved: $("#saved"),
+  versionLabel: $("#version-label"),
+  modal: $("#modal"),
   overlay: $("#drop-overlay"),
   toasts: $("#toasts"),
 };
@@ -60,7 +80,8 @@ const state = {
   busy: false,
   baseFolder: "",
   sources: [] as string[],
-  opts: { recursive: false, ocr: true } as Record<Opt, boolean>,
+  opts: { recursive: false, ocr: true, autoUpdate: true } as Record<Opt, boolean>,
+  roster: null as { file: string; students: Student[] } | null,
 };
 
 /** 表格的列：第 0 列是行号 */
@@ -70,9 +91,12 @@ const COLS: { key: "no" | "status" | EditKey | "method" | "file"; letter: string
   { key: "title", letter: "B", editable: true },
   { key: "name", letter: "C", editable: true },
   { key: "studentId", letter: "D", editable: true },
-  { key: "advisor", letter: "E", editable: true },
-  { key: "method", letter: "F" },
-  { key: "file", letter: "G" },
+  { key: "college", letter: "E", editable: true },
+  { key: "major", letter: "F", editable: true },
+  { key: "advisor", letter: "G", editable: true },
+  { key: "advisorTitle", letter: "H", editable: true },
+  { key: "method", letter: "I" },
+  { key: "file", letter: "J" },
 ];
 
 const esc = (s: string) =>
@@ -148,7 +172,9 @@ function updateHint() {
 
 function setBusy(busy: boolean) {
   state.busy = busy;
-  for (const b of $$<HTMLButtonElement>("#open-folder, #pick, #export-excel, #export-pdf, #export-png")) b.disabled = busy;
+  for (const b of $$<HTMLButtonElement>("#open-folder, #pick, #export-excel, #export-pdf, #export-png, #roster-btn, #rename-btn")) {
+    b.disabled = busy;
+  }
   $<HTMLButtonElement>("#rescan").disabled = busy || !state.sources.length;
 }
 
@@ -380,6 +406,7 @@ function setField(p: Paper, key: EditKey, raw: string) {
   if (value === p[key]) return;
   p[key] = value;
   if (key === "title") p.method = Method.Manual;
+  scheduleSave();
 }
 
 // 编辑栏（fx）：显示并可修改当前单元格
@@ -577,6 +604,9 @@ const drawerFields: [HTMLInputElement | HTMLTextAreaElement, EditKey][] = [
   [$("#d-name"), "name"],
   [$("#d-sid"), "studentId"],
   [$("#d-adv"), "advisor"],
+  [$("#d-college"), "college"],
+  [$("#d-major"), "major"],
+  [$("#d-rank"), "advisorTitle"],
 ];
 
 function showDetail() {
@@ -615,7 +645,10 @@ function showDetail() {
   ui.paneTitle.textContent = p.state === "pending" ? "正在识别…" : p.title || "（未识别出题目）";
   const kv = (k: string, v: string | number) => `<dt>${k}</dt><dd>${esc(String(v || "—"))}</dd>`;
   ui.paneKv.innerHTML =
-    kv("学生", [p.name, p.studentId].filter(Boolean).join(" · ")) + kv("导师", p.advisor) + kv("文件", `${p.file}${p.pages ? ` · ${p.pages} 页` : ""}`);
+    kv("学生", [p.name, p.studentId].filter(Boolean).join(" · ")) +
+    kv("专业", [p.college, p.major].filter(Boolean).join(" · ")) +
+    kv("导师", [p.advisor, p.advisorTitle].filter(Boolean).join(" · ")) +
+    kv("文件", `${p.file}${p.pages ? ` · ${p.pages} 页` : ""}`);
 
   ui.drawerPos.textContent = i >= 0 ? `第 ${i + 1} 篇 / 共 ${list.length} 篇` : "";
   ui.drawerFile.textContent = basename(p.path);
@@ -650,7 +683,10 @@ function confirmAndNext() {
   const nextId = before[i + 1]?.id ?? null;
   const confirming = isCheck(p) && p.state === "done";
   const fromCheckView = state.filter === "check";
-  if (confirming) p.method = Method.Confirmed;
+  if (confirming) {
+    p.method = Method.Confirmed;
+    scheduleSave();
+  }
 
   const allChecked = !state.papers.some(isCheck);
   if (allChecked && fromCheckView) {
@@ -666,7 +702,7 @@ function confirmAndNext() {
   render();
   scrollToSelected();
   if (allChecked && (confirming || fromCheckView)) {
-    toast("全部核对完了，可以导出了。", "ok", [{ label: "导出 Excel", run: exportExcel, primary: true }]);
+    toast("全部核对完了，可以导出了。", "ok", [{ label: "导出 Excel", run: showExportDialog, primary: true }]);
   }
 }
 
@@ -686,6 +722,7 @@ for (const b of $$<HTMLButtonElement>("[data-act]")) {
 // ---------------------------------------------------------------- 键盘
 
 document.addEventListener("keydown", (e) => {
+  if (!ui.modal.hidden) return;
   const inField = e.target instanceof Element && e.target.matches("input, textarea");
   if (e.key === "Escape") {
     ui.optionsPop.hidden = true;
@@ -772,7 +809,7 @@ async function extractOne(p: Paper) {
 
 async function start(sources: string[]) {
   if (state.busy || !sources.length) return;
-  let files: string[];
+  let files: { path: string; size: number; mtime: number }[];
   try {
     files = await collectPdfs(sources, state.opts.recursive);
   } catch (e) {
@@ -784,11 +821,14 @@ async function start(sources: string[]) {
   }
 
   state.sources = sources;
-  state.baseFolder = sources.length === 1 && (await isDir(sources[0])) ? sources[0] : dirname(files[0]);
-  state.papers = files.map((path, id) => ({
-    id, path, file: relative(path, state.baseFolder), state: "pending",
-    title: "", method: "", name: "", studentId: "", advisor: "", pages: 0,
+  state.baseFolder = sources.length === 1 && (await isDir(sources[0])) ? sources[0] : dirname(files[0].path);
+  state.papers = files.map(({ path, size, mtime }, id) => ({
+    id, path, size, mtime, file: relative(path, state.baseFolder), state: "pending",
+    title: "", method: "", name: "", studentId: "", advisor: "", advisorTitle: "", college: "", major: "", pages: 0,
   }));
+  const saved = loadProgress(state.baseFolder);
+  let restored = 0;
+  ui.saved.textContent = "";
   state.selected = 0;
   state.col = 2;
   state.filter = "all";
@@ -805,6 +845,15 @@ async function start(sources: string[]) {
   const worker = async () => {
     for (let p = queue.shift(); p; p = queue.shift()) {
       await extractOne(p);
+      p.auto = { ...pickFields(p), method: p.method };
+      // 上次在这个文件夹里改过、确认过的内容（文件没被替换才套用）
+      const s = saved[p.file];
+      if (s && s.size === p.size && s.mtime === p.mtime) {
+        Object.assign(p, pickFields(s));
+        if (s.method === Method.Manual || s.method === Method.Confirmed) p.method = s.method;
+        p.restored = true;
+        restored++;
+      }
       updatePaper(p);
       setStatus(`正在识别 ${++done} / ${files.length}`, done, files.length);
     }
@@ -813,10 +862,14 @@ async function start(sources: string[]) {
   setBusy(false);
   setStatus("就绪");
   showDetail();
+  if (restored) {
+    toast(`已恢复上次在这个文件夹里的修改（${restored} 篇）。`, "ok", [{ label: "放弃这些修改", run: discardRestored }]);
+  }
 
   const check = state.papers.filter(isCheck);
   if (!check.length) {
-    toast(`全部 ${files.length} 篇都已自动识别。`, "ok", [{ label: "导出 Excel", run: exportExcel, primary: true }]);
+    const msg = restored ? `全部 ${files.length} 篇都已识别或核对完毕。` : `全部 ${files.length} 篇都已自动识别。`;
+    toast(msg, "ok", [{ label: "导出 Excel", run: showExportDialog, primary: true }]);
     return;
   }
   const ocr = check.filter((p) => p.method.startsWith("OCR")).length;
@@ -895,7 +948,7 @@ const openActions = (path: string): ToastAction[] => [
   { label: "在文件夹中显示", run: () => revealPath(path) },
 ];
 
-async function exportExcel() {
+async function exportExcel(opts: ExcelOptions) {
   const target = await save({
     title: "保存 Excel",
     defaultPath: joinPath(state.baseFolder, "论文题目汇总.xlsx"),
@@ -903,7 +956,7 @@ async function exportExcel() {
   });
   if (!target || isPaperFile(target)) return;
   try {
-    await writeFile(target, await buildExcel(state.papers));
+    await writeFile(target, await buildExcel(state.papers, opts));
     toast(`已导出 ${state.papers.length} 篇论文到 Excel。`, "ok", openActions(target));
   } catch (e) {
     toast(errText(e), "error");
@@ -954,17 +1007,437 @@ async function copyTitles() {
   toast(`已复制 ${state.papers.length} 个题目，可以直接粘贴到 Word 或 Excel。`);
 }
 
-$("#export-excel").onclick = exportExcel;
+$("#export-excel").onclick = showExportDialog;
 $("#export-pdf").onclick = () => exportCovers("pdf");
 $("#export-png").onclick = () => exportCovers("png");
 $("#copy-titles").onclick = copyTitles;
+
+// ---------------------------------------------------------------- 对话框
+
+interface DialogAction {
+  label: string;
+  primary?: boolean;
+  id?: string;
+  /** 返回 true 表示保持对话框打开 */
+  run?: () => boolean | void | Promise<boolean | void>;
+}
+
+function openDialog(title: string, body: string, actions: DialogAction[], opts: { wide?: boolean; foot?: string } = {}) {
+  const back = ui.modal;
+  back.innerHTML = `<div class="modal ${opts.wide ? "wide" : ""}" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+    <div class="modal-head"><h2>${esc(title)}</h2>
+      <button class="icon-btn" data-close title="关闭"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+    <div class="modal-body">${body}</div>
+    <div class="modal-foot"><span class="grow">${opts.foot ?? ""}</span></div></div>`;
+  const foot = back.querySelector(".modal-foot")!;
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      close();
+    }
+  };
+  const close = () => {
+    back.hidden = true;
+    back.innerHTML = "";
+    document.removeEventListener("keydown", onKey, true);
+  };
+  for (const a of actions) {
+    const b = document.createElement("button");
+    b.className = `btn ${a.primary ? "primary" : ""}`;
+    b.textContent = a.label;
+    if (a.id) b.id = a.id;
+    b.onclick = async () => {
+      if ((await a.run?.()) !== true) close();
+    };
+    foot.append(b);
+  }
+  back.querySelector<HTMLButtonElement>("[data-close]")!.onclick = close;
+  back.onmousedown = (e) => {
+    if (e.target === back) close();
+  };
+  document.addEventListener("keydown", onKey, true);
+  back.hidden = false;
+  return { el: back.querySelector<HTMLElement>(".modal")!, foot: foot.querySelector<HTMLElement>(".grow")!, close };
+}
+
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const ta = Object.assign(document.createElement("textarea"), { value: text });
+    document.body.append(ta);
+    ta.select();
+    document.execCommand("copy");
+    ta.remove();
+  }
+}
+
+// ---------------------------------------------------------------- 自动保存核对进度
+
+let saveTimer = 0;
+
+function scheduleSave() {
+  clearTimeout(saveTimer);
+  saveTimer = window.setTimeout(saveNow, 400);
+}
+
+/** 只保存老师改过或确认过的论文；同一文件夹里没在本次打开的论文（比如只拖进来几个文件）保留原记录 */
+function saveNow() {
+  if (!state.baseFolder) return;
+  const all = loadProgress(state.baseFolder);
+  for (const p of state.papers) {
+    delete all[p.file];
+    if (!p.auto || p.state === "pending") continue;
+    const manual = p.method === Method.Manual || p.method === Method.Confirmed;
+    if (!manual && sameFields(p, p.auto)) continue;
+    all[p.file] = { ...pickFields(p), size: p.size, mtime: p.mtime, method: p.method };
+  }
+  const ok = saveProgress(state.baseFolder, all);
+  const time = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+  ui.saved.textContent = ok ? `✓ 修改已自动保存 ${time}` : "⚠ 自动保存失败";
+}
+
+function discardRestored() {
+  for (const p of state.papers) {
+    if (!p.restored || !p.auto) continue;
+    Object.assign(p, p.auto);
+    p.restored = false;
+  }
+  saveNow();
+  render();
+  toast("已放弃上次的修改，恢复为自动识别的结果。");
+}
+
+// ---------------------------------------------------------------- 名单核对
+
+function loadRoster(): typeof state.roster {
+  try {
+    const raw = localStorage.getItem("roster");
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function importRoster(): Promise<boolean> {
+  const f = await open({
+    title: "选择学生名单",
+    filters: [{ name: "学生名单（Excel / CSV）", extensions: ["xlsx", "csv", "txt"] }],
+  });
+  if (typeof f !== "string") return false;
+  try {
+    const students = await parseRoster(await readFile(f), f);
+    state.roster = { file: basename(f), students };
+    try {
+      localStorage.setItem("roster", JSON.stringify(state.roster));
+    } catch {}
+    return true;
+  } catch (e) {
+    toast(
+      `读取名单失败：${errText(e)}\n请使用 .xlsx 或 .csv 文件，并包含「学号」或「姓名」列。旧版 .xls 请先在 Excel 里另存为 .xlsx。`,
+      "error",
+    );
+    return false;
+  }
+}
+
+const rosterResult = () =>
+  state.roster ? matchRoster(state.roster.students, state.papers.filter((p) => p.state !== "pending")) : undefined;
+
+async function showRoster() {
+  if (!state.roster && !(await importRoster())) return;
+  const roster = state.roster!;
+  const r = rosterResult()!;
+  type Tab = "missing" | "mismatch" | "extra" | "ok";
+  let tab: Tab = r.missing.length ? "missing" : r.mismatched.length ? "mismatch" : r.extra.length ? "extra" : "ok";
+  const counts: Record<Tab, number> = {
+    missing: r.missing.length,
+    mismatch: r.mismatched.length,
+    extra: r.extra.length,
+    ok: r.submitted.length,
+  };
+  const labels: Record<Tab, string> = { missing: "未交", mismatch: "信息不一致", extra: "不在名单", ok: "已交" };
+  const body = `<p class="desc">名单：<b>${esc(roster.file)}</b>（${roster.students.length} 人）。按学号、姓名、文件名依次匹配论文。</p>
+    <div class="stats">${(Object.keys(labels) as Tab[])
+      .map((t) => `<button class="stat ${t}" data-tab="${t}"><b>${counts[t]}</b><span>${labels[t]}</span></button>`)
+      .join("")}</div><div id="roster-list"></div>`;
+
+  const dlg = openDialog(
+    "名单核对",
+    body,
+    [
+      {
+        label: "更换名单",
+        run: async () => {
+          if (await importRoster()) {
+            dlg.close();
+            showRoster();
+          }
+          return true;
+        },
+      },
+      {
+        label: "清除名单",
+        run: () => {
+          state.roster = null;
+          try {
+            localStorage.removeItem("roster");
+          } catch {}
+          toast("已清除名单。");
+        },
+      },
+      {
+        label: "复制未交名单",
+        run: async () => {
+          await copyText(r.missing.map((s) => [s.id, s.name].filter(Boolean).join("\t")).join("\n"));
+          toast(`已复制 ${r.missing.length} 位未交学生的学号和姓名。`);
+          return true;
+        },
+      },
+      { label: "关闭", primary: true },
+    ],
+    { wide: true, foot: "导出 Excel 时可以附带一张「名单核对」表" },
+  );
+
+  const list = dlg.el.querySelector<HTMLElement>("#roster-list")!;
+  const paperRow = (id: number, studentId: string, name: string, title: string, note: string) =>
+    `<tr data-paper="${id}" title="点击定位到这篇论文" style="cursor:pointer"><td>${esc(studentId)}</td><td>${esc(name)}</td><td class="wrap">${esc(title)}</td><td class="wrap">${esc(note)}</td></tr>`;
+  const table = (heads: string[], widths: string[], rows: string) =>
+    rows
+      ? `<table class="mini"><colgroup>${widths.map((w) => `<col style="width:${w}">`).join("")}</colgroup>
+         <thead><tr>${heads.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table>`
+      : `<div class="empty-note">没有${labels[tab]}的情况</div>`;
+
+  const draw = () => {
+    for (const b of dlg.el.querySelectorAll<HTMLElement>(".stat")) b.classList.toggle("on", b.dataset.tab === tab);
+    if (tab === "missing") {
+      list.innerHTML = table(["学号", "姓名"], ["40%", "60%"], r.missing.map((s) => `<tr><td>${esc(s.id)}</td><td>${esc(s.name)}</td></tr>`).join(""));
+    } else if (tab === "mismatch") {
+      list.innerHTML = table(["名单学号", "名单姓名", "论文题目", "说明"], ["16%", "14%", "40%", "30%"],
+        r.mismatched.map((m) => paperRow(m.paper.id, m.student.id, m.student.name, m.paper.title, m.reason)).join(""));
+    } else if (tab === "extra") {
+      list.innerHTML = table(["论文上的学号", "姓名", "论文题目", "文件名"], ["16%", "14%", "40%", "30%"],
+        r.extra.map((p) => paperRow(p.id, p.studentId, p.name, p.title, p.file)).join(""));
+    } else {
+      list.innerHTML = table(["学号", "姓名", "论文题目", "说明"], ["16%", "14%", "50%", "20%"],
+        r.submitted.flatMap((s) => s.papers.map((p) => paperRow(p.id, s.student.id, s.student.name, p.title,
+          s.papers.length > 1 ? `交了 ${s.papers.length} 份` : ""))).join(""));
+    }
+  };
+  for (const b of dlg.el.querySelectorAll<HTMLElement>(".stat")) {
+    b.onclick = () => {
+      tab = b.dataset.tab as Tab;
+      draw();
+    };
+  }
+  // 点论文行：关闭对话框并在主界面选中它
+  list.onclick = (e) => {
+    const tr = (e.target as HTMLElement).closest<HTMLElement>("tr[data-paper]");
+    if (!tr) return;
+    dlg.close();
+    const id = Number(tr.dataset.paper);
+    if (!visiblePapers().some((p) => p.id === id)) setFilter("all");
+    select(id);
+  };
+  draw();
+}
+
+$("#roster-btn").onclick = showRoster;
+
+// ---------------------------------------------------------------- 批量重命名
+
+function showRename() {
+  let pattern = DEFAULT_PATTERN;
+  try {
+    pattern = localStorage.getItem("rename:pattern") || DEFAULT_PATTERN;
+  } catch {}
+  const body = `<p class="desc">按模板修改 PDF 文件名。<b>不会覆盖任何已有文件</b>，改完后可以一键撤销。</p>
+    <div class="pattern"><input id="rn-pattern" spellcheck="false" value="${esc(pattern)}" /></div>
+    <div class="tokens">${Object.keys(TOKENS).map((t) => `<button data-token="${t}" title="插入${TOKENS[t].label}">${t}</button>`).join("")}</div>
+    <label class="check-line"><input type="checkbox" id="rn-skip" checked /> 跳过还需要核对的论文（题目可能不准）</label>
+    <table class="mini"><colgroup><col style="width:38%"><col style="width:4%"><col style="width:42%"><col style="width:16%"></colgroup>
+      <thead><tr><th>原文件名</th><th></th><th>新文件名</th><th>情况</th></tr></thead><tbody id="rn-rows"></tbody></table>`;
+
+  let plans: ReturnType<typeof planRenames> = [];
+  const dlg = openDialog("批量重命名", body, [
+    { label: "取消" },
+    { label: "开始重命名", primary: true, id: "rn-go", run: () => doRename(plans.filter((pl) => pl.status === "ok")) },
+  ], { wide: true });
+
+  const input = dlg.el.querySelector<HTMLInputElement>("#rn-pattern")!;
+  const skip = dlg.el.querySelector<HTMLInputElement>("#rn-skip")!;
+  const rows = dlg.el.querySelector<HTMLElement>("#rn-rows")!;
+  const go = dlg.el.querySelector<HTMLButtonElement>("#rn-go")!;
+  const statusText: Record<string, string> = { ok: "将改名", same: "已符合", missing: "缺少信息", conflict: "名字冲突", skip: "跳过" };
+
+  const update = () => {
+    const papers = state.papers.filter((p) => p.state !== "pending");
+    plans = planRenames(papers, input.value, (p) => skip.checked && isCheck(state.papers[p.id]));
+    rows.innerHTML = plans
+      .map((pl) => `<tr><td title="${esc(pl.from)}">${esc(basename(pl.from))}</td><td class="arrow">→</td>
+        <td title="${esc(pl.newName)}">${pl.status === "ok" ? esc(pl.newName) : "<span class='arrow'>—</span>"}</td>
+        <td title="${esc(pl.note)}"><span class="plan-st ${pl.status}">${statusText[pl.status]}</span> ${esc(pl.note)}</td></tr>`)
+      .join("");
+    const n = plans.filter((pl) => pl.status === "ok").length;
+    const bad = plans.filter((pl) => pl.status === "conflict" || pl.status === "missing").length;
+    go.textContent = n ? `重命名 ${n} 个文件` : "没有需要改名的文件";
+    go.disabled = !n;
+    dlg.foot.textContent = bad ? `${bad} 个文件缺少信息或名字冲突，不会改名` : "";
+  };
+  input.oninput = () => {
+    try {
+      localStorage.setItem("rename:pattern", input.value);
+    } catch {}
+    update();
+  };
+  skip.onchange = update;
+  for (const b of dlg.el.querySelectorAll<HTMLButtonElement>("[data-token]")) {
+    b.onclick = () => {
+      const t = b.dataset.token!;
+      const at = input.selectionStart ?? input.value.length;
+      input.value = input.value.slice(0, at) + t + input.value.slice(input.selectionEnd ?? at);
+      input.focus();
+      input.setSelectionRange(at + t.length, at + t.length);
+      input.dispatchEvent(new Event("input"));
+    };
+  }
+  update();
+}
+
+/** 改路径后，封面缓存、文件名等跟着更新 */
+function movePaper(p: Paper, to: string) {
+  for (const cache of [thumbCache, coverCache]) {
+    const url = cache.get(p.path);
+    if (url) {
+      cache.delete(p.path);
+      cache.set(to, url);
+    }
+  }
+  p.path = to;
+  p.file = relative(to, state.baseFolder);
+}
+
+async function doRename(plans: ReturnType<typeof planRenames>) {
+  const done: { id: number; from: string; to: string }[] = [];
+  const failed: string[] = [];
+  setBusy(true);
+  for (const [i, pl] of plans.entries()) {
+    setStatus(`正在重命名 ${i + 1} / ${plans.length}`, i + 1, plans.length);
+    try {
+      await renameFile(pl.from, pl.to);
+      movePaper(state.papers[pl.paper.id], pl.to);
+      done.push({ id: pl.paper.id, from: pl.from, to: pl.to });
+    } catch (e) {
+      failed.push(`${basename(pl.from)}：${errText(e)}`);
+    }
+  }
+  setBusy(false);
+  setStatus("就绪");
+  saveNow();
+  render();
+  if (done.length) toast(`已重命名 ${done.length} 个文件。`, "ok", [{ label: "撤销", run: () => undoRename(done) }]);
+  if (failed.length) toast(`以下文件没有改名：\n${failed.join("\n")}`, "warn");
+}
+
+async function undoRename(done: { id: number; from: string; to: string }[]) {
+  const failed: string[] = [];
+  for (const d of [...done].reverse()) {
+    try {
+      await renameFile(d.to, d.from);
+      movePaper(state.papers[d.id], d.from);
+    } catch (e) {
+      failed.push(`${basename(d.to)}：${errText(e)}`);
+    }
+  }
+  saveNow();
+  render();
+  toast(failed.length ? `部分文件没能改回：\n${failed.join("\n")}` : `已撤销，${done.length} 个文件恢复了原来的名字。`, failed.length ? "warn" : "ok");
+}
+
+$("#rename-btn").onclick = showRename;
+
+// ---------------------------------------------------------------- 导出 Excel 设置
+
+function loadExcelOpts(): ExcelOptions {
+  try {
+    const saved = JSON.parse(localStorage.getItem("excel:opts") ?? "null");
+    if (saved) return { ...DEFAULT_EXCEL_OPTIONS, ...saved };
+  } catch {}
+  return { ...DEFAULT_EXCEL_OPTIONS };
+}
+
+function showExportDialog() {
+  const o = loadExcelOpts();
+  const sorts: [SortKey, string][] = [["file", "按文件顺序"], ["studentId", "按学号"], ["name", "按姓名"], ["title", "按题目"]];
+  const body = `<p class="sec-title">导出哪些列</p>
+    <div class="col-grid">${EXCEL_COLUMNS.map((c) =>
+      `<label><input type="checkbox" value="${c.key}" ${o.columns.includes(c.key) ? "checked" : ""} /> ${c.header}</label>`).join("")}</div>
+    <div class="form-line"><span>排序</span><select id="xl-sort">${sorts.map(([v, t]) =>
+      `<option value="${v}" ${o.sort === v ? "selected" : ""}>${t}</option>`).join("")}</select></div>
+    <label class="opt-line"><input type="checkbox" id="xl-hl" ${o.highlight ? "checked" : ""} /> 需要核对的行标黄</label>
+    ${state.roster ? `<label class="opt-line" style="margin-top:8px"><input type="checkbox" id="xl-roster" checked /> 附带「名单核对」表（${esc(state.roster.file)}）</label>` : ""}`;
+  const dlg = openDialog("导出 Excel", body, [
+    { label: "取消" },
+    {
+      label: "导出…",
+      primary: true,
+      run: () => {
+        const columns = [...dlg.el.querySelectorAll<HTMLInputElement>(".col-grid input:checked")].map((i) => i.value) as ExcelOptions["columns"];
+        if (!columns.length) {
+          toast("至少要勾选一列。", "warn");
+          return true;
+        }
+        const opts: ExcelOptions = {
+          columns,
+          sort: dlg.el.querySelector<HTMLSelectElement>("#xl-sort")!.value as SortKey,
+          highlight: dlg.el.querySelector<HTMLInputElement>("#xl-hl")!.checked,
+        };
+        try {
+          localStorage.setItem("excel:opts", JSON.stringify(opts));
+        } catch {}
+        if (dlg.el.querySelector<HTMLInputElement>("#xl-roster")?.checked) opts.roster = rosterResult();
+        exportExcel(opts);
+      },
+    },
+  ]);
+}
+
+// ---------------------------------------------------------------- 检查更新
+
+let appVersion = "";
+
+async function runUpdateCheck(manual: boolean) {
+  try {
+    const info = await checkForUpdate(appVersion);
+    if (info) {
+      toast(`发现新版本 v${info.version}（当前 v${appVersion}）${info.notes ? `\n${info.notes}` : ""}`, "ok", [
+        { label: "去下载", primary: true, run: () => openUrl(info.url) },
+      ]);
+    } else if (manual) {
+      toast(`已经是最新版本（v${appVersion}）。`);
+    }
+  } catch (e) {
+    // 自动检查失败（比如连不上 GitHub）不打扰老师
+    if (manual) toast(`检查更新失败：${errText(e)}\n可能是网络连不上 GitHub，可以稍后再试，或直接访问\n${RELEASES_URL}`, "warn");
+  }
+}
+
+$("#check-update").onclick = () => runUpdateCheck(true);
 
 // ---------------------------------------------------------------- 启动
 
 applyTheme(document.documentElement.dataset.theme === "dark" ? "dark" : "light");
 loadOpts();
+state.roster = loadRoster();
 setBusy(false);
 updateHint();
+getVersion().then((v) => {
+  appVersion = v;
+  ui.versionLabel.textContent = `当前版本 v${v}`;
+  if (state.opts.autoUpdate) runUpdateCheck(false);
+});
 
 // 开发调试用：自动化测试无法操作系统的文件对话框，直接传入文件夹（正式版中会被移除）
-if (import.meta.env.DEV) Object.assign(window, { __start: start, __setView: setView });
+if (import.meta.env.DEV) {
+  Object.assign(window, { __start: start, __setView: setView, __dev: { state, showRoster, showRename, showExportDialog, runUpdateCheck } });
+}

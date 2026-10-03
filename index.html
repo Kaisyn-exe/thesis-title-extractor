@@ -57,6 +57,11 @@
             <div class="popover" id="options-pop" hidden>
               <label class="toggle"><input type="checkbox" data-opt="recursive" /><i></i><span><b>包含子文件夹</b><small>论文分散在多层文件夹里时打开</small></span></label>
               <label class="toggle"><input type="checkbox" data-opt="ocr" /><i></i><span><b>扫描件 OCR</b><small>没有文字的扫描件，用 Windows 自带 OCR 识别封面（离线）</small></span></label>
+              <label class="toggle"><input type="checkbox" data-opt="autoUpdate" /><i></i><span><b>启动时检查更新</b><small>有新版本时提示，不会自动下载</small></span></label>
+              <div class="pop-foot">
+                <span id="version-label"></span>
+                <button class="btn small" id="check-update">检查更新</button>
+              </div>
             </div>
           </div>
         </div>
@@ -76,6 +81,16 @@
           <button class="rb needs-data" id="copy-titles" title="每行一个题目，可直接粘贴到 Word / Excel">
             <svg viewBox="0 0 24 24"><rect x="8" y="3.5" width="12" height="14" rx="1.5" /><path d="M16 20.5H5.5A1.5 1.5 0 0 1 4 19V7.5" /></svg>
             <span>复制题目</span>
+          </button>
+        </div>
+        <div class="group">
+          <button class="rb needs-data" id="roster-btn" title="导入班级名单，找出未交、不在名单、信息不一致的论文">
+            <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2" /><path d="M3.5 19a5.5 5.5 0 0 1 11 0M15.5 11.5l2 2 3.5-4" /></svg>
+            <span>名单核对</span>
+          </button>
+          <button class="rb needs-data" id="rename-btn" title="按「学号_姓名_题目」等格式批量修改 PDF 文件名">
+            <svg viewBox="0 0 24 24"><path d="M4 7.5h9M4 12h6M4 16.5h5M14.5 18.5l1-3.5 5-5a1.8 1.8 0 0 1 2.5 2.5l-5 5Z" /></svg>
+            <span>批量重命名</span>
           </button>
         </div>
         <div class="group">
@@ -133,11 +148,12 @@
         <div class="sheet" id="sheet">
           <table>
             <colgroup>
-              <col style="width: 46px" /><col style="width: 96px" /><col /><col style="width: 92px" />
-              <col style="width: 118px" /><col style="width: 92px" /><col style="width: 138px" /><col style="width: 20%" />
+              <col style="width: 46px" /><col style="width: 96px" /><col style="width: 340px" /><col style="width: 86px" />
+              <col style="width: 112px" /><col style="width: 160px" /><col style="width: 190px" /><col style="width: 86px" />
+              <col style="width: 76px" /><col style="width: 132px" /><col style="width: 240px" />
             </colgroup>
             <thead>
-              <tr><th></th><th>状态</th><th>论文题目</th><th>学生姓名</th><th>学号</th><th>指导教师</th><th>识别方式</th><th>文件名</th></tr>
+              <tr><th></th><th>状态</th><th>论文题目</th><th>学生姓名</th><th>学号</th><th>学院</th><th>专业年级</th><th>指导教师</th><th>职称</th><th>识别方式</th><th>文件名</th></tr>
             </thead>
             <tbody id="rows"></tbody>
           </table>
@@ -184,6 +200,11 @@
             <label class="field"><span>学号</span><input id="d-sid" spellcheck="false" /></label>
             <label class="field"><span>指导教师</span><input id="d-adv" spellcheck="false" /></label>
           </div>
+          <div class="field-row two">
+            <label class="field"><span>学院</span><input id="d-college" spellcheck="false" /></label>
+            <label class="field"><span>职称</span><input id="d-rank" spellcheck="false" /></label>
+          </div>
+          <label class="field"><span>专业年级</span><input id="d-major" spellcheck="false" /></label>
           <div class="drawer-foot">
             <button class="btn" id="drawer-prev">上一篇</button>
             <button class="btn primary next-btn" id="drawer-next"></button>
@@ -196,10 +217,12 @@
         <span id="status">就绪</span>
         <span class="progress" id="progress" hidden><i id="bar"></i></span>
         <span id="summary"></span>
+        <span class="saved" id="saved"></span>
         <span class="hint" id="hint"></span>
       </footer>
     </div>
 
+    <div class="modal-backdrop" id="modal" hidden></div>
     <div id="drop-overlay" hidden><div>松开鼠标，开始识别</div></div>
     <div id="toasts" aria-live="polite"></div>
   </body>

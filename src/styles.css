@@ -159,8 +159,8 @@ svg { flex-shrink: 0; }
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  min-width: 62px;
-  padding: 5px 8px 4px;
+  min-width: 56px;
+  padding: 5px 6px 4px;
   border: 1px solid transparent;
   border-radius: 4px;
   background: transparent;
@@ -198,7 +198,7 @@ svg { flex-shrink: 0; }
   align-items: center;
   gap: 6px;
   margin-left: auto;
-  width: 240px;
+  width: 200px;
   min-width: 140px;
   height: 30px;
   padding: 0 8px;
@@ -476,8 +476,87 @@ td.pending { color: var(--muted); font-weight: 400; }
 .toast .x { border: 0; background: none; padding: 0 4px; color: var(--muted); font-size: 18px; line-height: 1.2; cursor: pointer; }
 @keyframes slide { from { opacity: 0; transform: translateY(8px); } }
 
-@media (max-width: 1180px) {
+@media (max-width: 1240px) {
   .rb span { display: none; }
   .rb { min-width: 40px; }
   .search { width: 180px; }
 }
+
+/* ============================================================ v1.1 新增 */
+/* 表格变宽后左右滚动，行号列固定在左侧（类似 Excel 冻结首列） */
+td.n, th:first-child { position: sticky; left: 0; z-index: 1; }
+th:first-child { z-index: 3; }
+
+.pop-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 8px 4px; padding-top: 8px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+.btn.small { height: 28px; padding: 0 10px; font-size: 12.5px; }
+.saved { color: var(--g); }
+
+/* 对话框 */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.35);
+}
+.modal {
+  display: flex;
+  flex-direction: column;
+  width: min(760px, 100%);
+  max-height: min(680px, 100%);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  animation: slide 0.16s ease-out;
+}
+.modal.wide { width: min(980px, 100%); }
+.modal-head { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+.modal-head h2 { flex: 1; margin: 0; font-size: 16px; }
+.modal-body { flex: 1; min-height: 0; overflow: auto; padding: 16px 18px; user-select: text; }
+.modal-foot { display: flex; align-items: center; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--line); background: var(--chrome); border-radius: 0 0 10px 10px; }
+.modal-foot .grow { flex: 1; color: var(--muted); font-size: 12.5px; }
+.modal p.desc { margin: 0 0 12px; color: var(--muted); }
+
+/* 名单核对 */
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; }
+.stat { padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--chrome); cursor: pointer; text-align: left; }
+.stat b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.stat span { color: var(--muted); font-size: 12.5px; }
+.stat.on { border-color: var(--g); box-shadow: 0 0 0 2px var(--g-ring); }
+.stat.missing b { color: var(--red); }
+.stat.mismatch b { color: #b45309; }
+:root[data-theme="dark"] .stat.mismatch b { color: var(--yel-ink); }
+.stat.extra b { color: var(--blue-ink); }
+.stat.ok b { color: var(--g); }
+.mini { width: 100%; border-collapse: collapse; table-layout: fixed; min-width: 0; }
+.mini th, .mini td { position: static; height: auto; padding: 6px 8px; border: 0; border-bottom: 1px solid var(--grid); text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: transparent; }
+.mini th { color: var(--muted); font-weight: 600; background: var(--chrome); }
+.mini td.wrap { white-space: normal; }
+.empty-note { padding: 20px; color: var(--muted); text-align: center; }
+
+/* 批量重命名 */
+.pattern { display: flex; gap: 8px; align-items: center; }
+.pattern input { flex: 1; height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); font-size: 14px; user-select: text; }
+.pattern input:focus { outline: none; border-color: var(--g); box-shadow: 0 0 0 2px var(--g-ring); }
+.tokens { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 12px; }
+.tokens button { height: 26px; padding: 0 9px; border: 1px dashed var(--g); border-radius: 13px; background: var(--g-soft); color: var(--g-strong); cursor: pointer; font-size: 12.5px; }
+.check-line { display: flex; align-items: center; gap: 7px; margin-bottom: 12px; cursor: pointer; }
+.check-line input { width: 15px; height: 15px; margin: 0; accent-color: var(--g); }
+.plan-st { display: inline-block; padding: 0 6px; border-radius: 3px; font-size: 12px; background: var(--g-soft); color: var(--g-strong); }
+.plan-st.skip, .plan-st.same { background: var(--hover); color: var(--muted); }
+.plan-st.missing { background: var(--yel); color: var(--yel-ink); }
+.plan-st.conflict { background: var(--red-soft); color: var(--red); }
+.arrow { color: var(--muted); }
+
+/* 导出设置 */
+.col-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px 12px; margin: 6px 0 16px; }
+.col-grid label, .opt-line { display: flex; align-items: center; gap: 7px; cursor: pointer; }
+.col-grid input, .opt-line input { width: 15px; height: 15px; margin: 0; accent-color: var(--g); }
+.form-line { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.form-line > span { width: 72px; color: var(--muted); }
+.form-line select { height: 32px; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); }
+.sec-title { margin: 0 0 4px; font-weight: 600; }
+.field-row.two { grid-template-columns: 1fr 120px; }

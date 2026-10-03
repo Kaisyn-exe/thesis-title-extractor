@@ -5,6 +5,7 @@ mod ocr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
 use tauri::ipc::{InvokeBody, Request, Response};
 use tauri_plugin_opener::OpenerExt;
 
@@ -30,9 +31,17 @@ fn walk(dir: &Path, recursive: bool, out: &mut Vec<PathBuf>) -> std::io::Result<
     Ok(())
 }
 
+#[derive(Serialize)]
+struct PdfEntry {
+    path: String,
+    /// 文件大小与修改时间（毫秒），用来判断保存的核对进度是否还对应同一个文件
+    size: u64,
+    mtime: u64,
+}
+
 /// 把若干文件夹 / 文件展开成 PDF 文件列表（文件夹按需递归）。
 #[tauri::command]
-fn collect_pdfs(paths: Vec<String>, recursive: bool) -> Result<Vec<String>, String> {
+fn collect_pdfs(paths: Vec<String>, recursive: bool) -> Result<Vec<PdfEntry>, String> {
     let mut out = Vec::new();
     for p in paths.iter().map(PathBuf::from) {
         if p.is_dir() {
@@ -41,7 +50,38 @@ fn collect_pdfs(paths: Vec<String>, recursive: bool) -> Result<Vec<String>, Stri
             out.push(p);
         }
     }
-    Ok(out.into_iter().map(|p| p.to_string_lossy().into_owned()).collect())
+    Ok(out
+        .into_iter()
+        .map(|p| {
+            let meta = fs::metadata(&p).ok();
+            let mtime = meta
+                .as_ref()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            PdfEntry {
+                path: p.to_string_lossy().into_owned(),
+                size: meta.map(|m| m.len()).unwrap_or(0),
+                mtime,
+            }
+        })
+        .collect())
+}
+
+/// 重命名文件。目标已存在时拒绝（std::fs::rename 在 Windows 上会直接覆盖，绝不能这样）。
+/// 只改大小写（如 a.pdf → A.pdf）时目标「已存在」的其实是同一个文件，允许。
+#[tauri::command]
+fn rename_file(from: String, to: String) -> Result<(), String> {
+    let (src, dst) = (Path::new(&from), Path::new(&to));
+    if !src.is_file() {
+        return Err(format!("找不到文件：{from}"));
+    }
+    let same_file = from.to_lowercase() == to.to_lowercase();
+    if dst.exists() && !same_file {
+        return Err(format!("已存在同名文件：{to}"));
+    }
+    fs::rename(src, dst).map_err(|e| format!("无法重命名 {from}：{e}"))
 }
 
 #[tauri::command]
@@ -117,6 +157,7 @@ pub fn run() {
             is_dir,
             read_file,
             write_file,
+            rename_file,
             ocr_image,
             open_path,
             reveal_path

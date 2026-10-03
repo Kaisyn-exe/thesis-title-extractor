@@ -38,6 +38,11 @@ export interface ExtractResult {
   name: string;
   studentId: string;
   advisor: string;
+  /** 导师职称 */
+  advisorTitle: string;
+  college: string;
+  /** 专业 / 专业年级 / 专业班级 */
+  major: string;
   pages: number;
 }
 
@@ -63,6 +68,9 @@ const TITLE_LABEL =
 const NAME_LABEL = alt(["研究生姓名", "学生姓名", "姓名", "作者"]);
 const ID_LABEL = alt(["学号"]);
 const ADVISOR_LABEL = alt(["指导教师", "指导老师", "导师"]);
+const RANK_LABEL = alt(["职称"]);
+const COLLEGE_LABEL = alt(["教学学院", "所在学院", "学院名称", "学院", "院系", "系别"]) + "|院\\s*[（(]\\s*系\\s*[)）]";
+const MAJOR_LABEL = alt(["专业年级", "专业班级", "年级专业", "专业名称", "专业"]);
 
 /** 封面上常见的栏目名：用来判断「这一行是另一个栏目」或「值到这里结束」 */
 const FIELD_ANY = alt([
@@ -281,14 +289,18 @@ export function rowsFromGlyphs(glyphs: Glyph[], fuzzy = false): Row[] {
  * 不截断会把「学号」后面的数字也算进姓名。
  */
 function findField(
-  rows: Row[], labelPat: string, window = 0.6, multiline = false,
+  rows: Row[], labelPat: string, window = 0.6, multiline = false, midRow = false,
 ): { value: string; row: Row } | null {
-  const labelRe = new RegExp(`^\\s*(?:${labelPat})${FIELD_END}\\s*`, "i");
+  // midRow：标签也可以出现在一行中间，如「指导教师 张三 职称 讲师」里的「职称」
+  const labelRe = midRow
+    ? new RegExp(`(?:^|\\s)(?:${labelPat})${FIELD_END}\\s*`, "i")
+    : new RegExp(`^\\s*(?:${labelPat})${FIELD_END}\\s*`, "i");
+  const fieldRows = rows.filter((r) => ROW_IS_FIELD_RE.test(r.text));
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     const m = labelRe.exec(row.text);
     if (!m) continue;
-    const valueStart = m[0].length;
+    const valueStart = m.index + m[0].length;
     let k = valueStart - 1;
     while (k >= 0 && row.pos[k] === null) k--;
     const xFrom = row.pos[k]!.x1;
@@ -299,8 +311,11 @@ function findField(
     const parts: string[] = [];
     let last = i;
     rows.forEach((r, j) => {
-      if (Math.abs(r.cy - row.cy) > row.size * window) return;
+      const dist = Math.abs(r.cy - row.cy);
+      if (dist > row.size * window) return;
       if (j !== i && ROW_IS_FIELD_RE.test(r.text)) return;
+      // 夹在两个栏目之间的行，归离它更近的那个栏目
+      if (j !== i && fieldRows.some((f) => f !== row && Math.abs(r.cy - f.cy) < dist)) return;
       let stop = xTo;
       const other = j !== i ? FIELD_IN_ROW_RE.exec(r.text) : null;
       if (other) stop = Math.min(stop, r.xAt(other.index));
@@ -390,10 +405,11 @@ export function parseFileName(fileName: string): { title: string; studentId: str
   const stem = fileName.replace(/^.*[\\/]/, "").replace(/\.pdf$/i, "");
   const sid = /(?<!\d)\d{8,13}(?!\d)/.exec(stem)?.[0] ?? "";
   const parts = stem.split(/[_＿+＋\-—\s]+/).map((p) => p.trim()).filter(Boolean);
+  // 只有一段（没有分隔符）时，整个文件名更可能是题目而不是姓名
   const name =
-    parts.find(
+    parts.length > 1 && parts.find(
       (p) => /^[一-鿿·]{2,5}$/.test(p) &&!/论文|原文|定稿|终稿|初稿|修改|毕业|设计/.test(p),
-    ) ?? "";
+    ) || "";
   const words = parts.filter(
     (p) =>
       !/^[\d.]+$/.test(p) && p !== name &&
@@ -412,18 +428,13 @@ export interface ExtractOptions {
   maxOcrPages?: number;
 }
 
-interface Detected {
-  title: string;
-  method: string;
-  page: number;
-  name: string;
-  studentId: string;
-  advisor: string;
-}
+type Detected = Omit<ExtractResult, "pages"> & { page: number };
 
 function detect(pages: Row[][]): Detected {
   const compact = (s: string) => s.replace(/\s/g, "");
-  const d: Detected = { title: "", method: "", page: -1, name: "", studentId: "", advisor: "" };
+  const d: Detected = {
+    title: "", method: "", page: -1, name: "", studentId: "", advisor: "", advisorTitle: "", college: "", major: "",
+  };
   for (const rows of pages) {
     const name = findField(rows, NAME_LABEL);
     d.name ||= compact(name?.value ?? "");
@@ -432,6 +443,10 @@ function detect(pages: Row[][]): Detected {
     const nameRow = (name?.row.text ?? "").replace(/(?<=\d)\s+(?=\d)/g, ""); // OCR 常把数字逐个分开
     d.studentId ||= /(?<!\d)\d{8,13}(?!\d)/.exec(nameRow)?.[0] ?? "";
     d.advisor ||= compact(findField(rows, ADVISOR_LABEL)?.value ?? "");
+    d.advisorTitle ||= compact(findField(rows, RANK_LABEL, 0.6, false, true)?.value ?? "");
+    // 学院、专业在表格式封面里可能分两行写，取值范围和题目一样放宽
+    d.college ||= compact(findField(rows, COLLEGE_LABEL, 1.6)?.value ?? "");
+    d.major ||= compact(findField(rows, MAJOR_LABEL, 1.6)?.value ?? "");
   }
   const steps: [(rows: Row[]) => string, string][] = [
     [(rows) => findField(rows, TITLE_LABEL, 1.6, true)?.value ?? "", Method.Label],
@@ -481,10 +496,8 @@ export async function extract(
     d.method = ocrMethod[d.method] ?? d.method;
   }
 
-  const res: ExtractResult = {
-    title: d.title, method: d.method, name: d.name, studentId: d.studentId, advisor: d.advisor,
-    pages: doc.numPages,
-  };
+  const { page: _page, ...found } = d;
+  const res: ExtractResult = { ...found, pages: doc.numPages };
   const fromName = parseFileName(fileName);
   res.studentId ||= fromName.studentId;
   res.name ||= fromName.name;
