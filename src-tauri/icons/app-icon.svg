@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4C86F0"/>
+      <stop offset="1" stop-color="#2556C4"/>
+    </linearGradient>
+  </defs>
+  <rect x="48" y="48" width="928" height="928" rx="208" fill="url(#bg)"/>
+  <!-- 文档 -->
+  <path d="M300 196h300l156 156v448a52 52 0 0 1-52 52H300a52 52 0 0 1-52-52V248a52 52 0 0 1 52-52Z" fill="#fff"/>
+  <path d="M600 196v104a52 52 0 0 0 52 52h104Z" fill="#C9DAFB"/>
+  <!-- 被提取出来的题目行 -->
+  <rect x="300" y="418" width="404" height="92" rx="20" fill="#FFC542"/>
+  <rect x="336" y="450" width="332" height="28" rx="14" fill="#7A5300" opacity=".55"/>
+  <!-- 正文行 -->
+  <rect x="336" y="572" width="332" height="26" rx="13" fill="#C9D4E6"/>
+  <rect x="336" y="640" width="332" height="26" rx="13" fill="#C9D4E6"/>
+  <rect x="336" y="708" width="220" height="26" rx="13" fill="#C9D4E6"/>
+</svg>

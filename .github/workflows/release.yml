@@ -1,0 +1,36 @@
+# 推送 v* 标签（如 v1.0.0）时，在 Windows 上打包安装程序并发布到 Releases
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+      - run: npm ci
+      - run: npm test
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "论文题目提取工具 ${{ github.ref_name }}"
+          releaseBody: |
+            下载 `*_x64-setup.exe` 双击安装即可（推荐）；`*.msi` 适合机房统一部署。
+            支持 Windows 10 / 11。
+          releaseDraft: false

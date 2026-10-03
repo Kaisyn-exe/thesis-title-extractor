@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>论文题目提取工具</title>
+    <script>
+      // 在页面渲染前确定主题，避免启动时闪一下白屏
+      try {
+        const t = localStorage.getItem("theme");
+        document.documentElement.dataset.theme =
+          t || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      } catch {
+        document.documentElement.dataset.theme = "light";
+      }
+    </script>
+    <script type="module" src="/src/main.ts"></script>
+  </head>
+  <body>
+    <div class="app" id="app" data-view="table" data-empty="true">
+      <!-- 标题栏 -->
+      <!-- 自绘标题栏：拖动移动窗口，双击最大化（data-tauri-drag-region 只对元素本身生效，所以文字上也要加） -->
+      <header class="titlebar" data-tauri-drag-region>
+        <img src="/icon.svg" alt="" data-tauri-drag-region />
+        <b data-tauri-drag-region>论文题目提取工具</b>
+        <span class="folder" id="folder" data-tauri-drag-region></span>
+        <div class="win-controls">
+          <button id="win-min" title="最小化" aria-label="最小化">
+            <svg viewBox="0 0 10 10"><path d="M0 5h10" /></svg>
+          </button>
+          <button id="win-max" title="最大化" aria-label="最大化">
+            <svg class="i-max" viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" /></svg>
+            <svg class="i-restore" viewBox="0 0 10 10"><path d="M2.5 2.5V.5h7v7h-2M.5 2.5h7v7h-7Z" /></svg>
+          </button>
+          <button id="win-close" class="close" title="关闭" aria-label="关闭">
+            <svg viewBox="0 0 10 10"><path d="M0 0l10 10M10 0 0 10" /></svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- 功能区 -->
+      <nav class="ribbon">
+        <div class="group">
+          <button class="rb" id="open-folder" title="选择存放论文 PDF 的文件夹">
+            <svg viewBox="0 0 24 24"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4.2l1.8 2h9a1.5 1.5 0 0 1 1.5 1.5V10M3 7.5V18a1.5 1.5 0 0 0 1.5 1.5h13.2a1.5 1.5 0 0 0 1.4-1l2.3-6.2a1 1 0 0 0-.9-1.3H7.2a1.5 1.5 0 0 0-1.4 1L3 18" /></svg>
+            <span>打开文件夹</span>
+          </button>
+          <button class="rb" id="rescan" title="按当前选项重新识别">
+            <svg viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4" /></svg>
+            <span>重新识别</span>
+          </button>
+          <div class="pop-wrap">
+            <button class="rb" id="options-btn">
+              <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" /><path d="M12 2.8v2.4M12 18.8v2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M2.8 12h2.4M18.8 12h2.4M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7" /></svg>
+              <span>选项</span>
+            </button>
+            <div class="popover" id="options-pop" hidden>
+              <label class="toggle"><input type="checkbox" data-opt="recursive" /><i></i><span><b>包含子文件夹</b><small>论文分散在多层文件夹里时打开</small></span></label>
+              <label class="toggle"><input type="checkbox" data-opt="ocr" /><i></i><span><b>扫描件 OCR</b><small>没有文字的扫描件，用 Windows 自带 OCR 识别封面（离线）</small></span></label>
+            </div>
+          </div>
+        </div>
+        <div class="group">
+          <button class="rb primary needs-data" id="export-excel">
+            <svg viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="2" /><path d="M3.5 9h17M3.5 14.5h17M9 9v11.5" /></svg>
+            <span>导出 Excel</span>
+          </button>
+          <button class="rb needs-data" id="export-pdf" title="每篇论文的封面依次排列，带书签">
+            <svg viewBox="0 0 24 24"><path d="M7 3.5h7l4 4V17a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 17V5A1.5 1.5 0 0 1 7.5 3.5M14 3.5V7.5h4M9 20.5h8.5A1.5 1.5 0 0 0 19 19V10" /></svg>
+            <span>封面合集</span>
+          </button>
+          <button class="rb needs-data" id="export-png" title="每篇一张 PNG，按序号命名">
+            <svg viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2" /><circle cx="9" cy="10" r="1.8" /><path d="m4 18 5-5 3.5 3.5 2.5-2.5 5 4.5" /></svg>
+            <span>封面图片</span>
+          </button>
+          <button class="rb needs-data" id="copy-titles" title="每行一个题目，可直接粘贴到 Word / Excel">
+            <svg viewBox="0 0 24 24"><rect x="8" y="3.5" width="12" height="14" rx="1.5" /><path d="M16 20.5H5.5A1.5 1.5 0 0 1 4 19V7.5" /></svg>
+            <span>复制题目</span>
+          </button>
+        </div>
+        <div class="group">
+          <button class="rb view-btn" data-view="table" aria-pressed="true">
+            <svg viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="1.5" /><path d="M3.5 9.5h17M3.5 14.5h17M8.5 4.5v15" /></svg>
+            <span>表格</span>
+          </button>
+          <button class="rb view-btn" data-view="gallery" aria-pressed="false">
+            <svg viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7" height="7" rx="1.2" /><rect x="13.5" y="3.5" width="7" height="7" rx="1.2" /><rect x="3.5" y="13.5" width="7" height="7" rx="1.2" /><rect x="13.5" y="13.5" width="7" height="7" rx="1.2" /></svg>
+            <span>整体预览</span>
+          </button>
+          <button class="rb" id="theme-btn">
+            <svg class="moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5Z" /></svg>
+            <svg class="sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" /><path d="M12 2.5v2M12 19.5v2M4.6 4.6 6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4" /></svg>
+            <span id="theme-label">深色模式</span>
+          </button>
+        </div>
+        <div class="filters needs-data" role="tablist">
+          <button data-filter="all" class="on">全部 <b id="cnt-all">0</b></button>
+          <button data-filter="check" class="warn">需核对 <b id="cnt-check">0</b></button>
+          <button data-filter="done">已完成 <b id="cnt-done">0</b></button>
+        </div>
+        <label class="search needs-data">
+          <svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6" /><path d="m15 15 5 5" /></svg>
+          <input id="search" type="search" placeholder="搜索题目、姓名、学号" spellcheck="false" />
+        </label>
+      </nav>
+
+      <!-- 空状态：还没有打开文件夹 -->
+      <section class="empty-state" id="empty-state">
+        <div class="drop">
+          <svg viewBox="0 0 96 80" aria-hidden="true" class="art">
+            <path d="M8 18a6 6 0 0 1 6-6h20l7 8h41a6 6 0 0 1 6 6v40a6 6 0 0 1-6 6H14a6 6 0 0 1-6-6Z" class="art-folder" />
+            <rect x="34" y="22" width="30" height="40" rx="3" class="art-page" transform="rotate(-7 49 42)" />
+            <rect x="42" y="18" width="30" height="40" rx="3" class="art-page" />
+            <rect x="47" y="26" width="20" height="6" rx="3" class="art-hl" />
+            <rect x="47" y="37" width="20" height="3" rx="1.5" class="art-line" />
+            <rect x="47" y="44" width="20" height="3" rx="1.5" class="art-line" />
+            <rect x="47" y="51" width="12" height="3" rx="1.5" class="art-line" />
+          </svg>
+          <h1>把论文所在的文件夹拖到这里</h1>
+          <p>自动读出每篇论文的题目、学生姓名、学号和指导教师</p>
+          <button class="btn primary large" id="pick">选择文件夹</button>
+          <p class="privacy">全部在本机处理，论文不会上传到任何地方</p>
+        </div>
+      </section>
+
+      <!-- 表格视图 -->
+      <section class="table-view" id="table-view">
+        <div class="fbar">
+          <span class="cell-name" id="cell-name"></span>
+          <span class="fx">fx</span>
+          <input id="fx-input" spellcheck="false" placeholder="选中单元格后可在这里修改" />
+        </div>
+        <div class="sheet" id="sheet">
+          <table>
+            <colgroup>
+              <col style="width: 46px" /><col style="width: 96px" /><col /><col style="width: 92px" />
+              <col style="width: 118px" /><col style="width: 92px" /><col style="width: 138px" /><col style="width: 20%" />
+            </colgroup>
+            <thead>
+              <tr><th></th><th>状态</th><th>论文题目</th><th>学生姓名</th><th>学号</th><th>指导教师</th><th>识别方式</th><th>文件名</th></tr>
+            </thead>
+            <tbody id="rows"></tbody>
+          </table>
+          <p class="no-match" id="no-match" hidden>没有符合条件的论文</p>
+        </div>
+        <div class="pane" id="pane">
+          <button class="pane-cover cover-box" id="pane-cover" title="点击打开 PDF"></button>
+          <div class="pane-info">
+            <h3 id="pane-title"></h3>
+            <div class="note" id="pane-note"></div>
+            <dl class="kv" id="pane-kv"></dl>
+          </div>
+          <div class="pane-actions">
+            <button class="btn primary next-btn" id="pane-next"></button>
+            <button class="btn" data-act="open">打开 PDF</button>
+            <button class="btn" data-act="reveal">在文件夹中显示</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 整体预览（封面墙） -->
+      <section class="gallery-view" id="gallery-view">
+        <div class="grid" id="grid"></div>
+        <aside class="drawer" id="drawer">
+          <div class="drawer-head">
+            <span id="drawer-pos"></span>
+            <button class="icon-btn" id="drawer-close" title="关闭">
+              <svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" /></svg>
+            </button>
+          </div>
+          <div class="drawer-cover-row">
+            <button class="drawer-cover cover-box" id="drawer-cover" title="点击打开 PDF"></button>
+            <div class="drawer-file">
+              <b id="drawer-file"></b>
+              <span id="drawer-meta"></span>
+              <button class="link" data-act="open">打开 PDF</button>
+              <button class="link" data-act="reveal">在文件夹中显示</button>
+            </div>
+          </div>
+          <div class="note" id="drawer-note"></div>
+          <label class="field"><span>论文题目</span><textarea id="d-title" rows="3" spellcheck="false"></textarea></label>
+          <div class="field-row">
+            <label class="field"><span>学生姓名</span><input id="d-name" spellcheck="false" /></label>
+            <label class="field"><span>学号</span><input id="d-sid" spellcheck="false" /></label>
+            <label class="field"><span>指导教师</span><input id="d-adv" spellcheck="false" /></label>
+          </div>
+          <div class="drawer-foot">
+            <button class="btn" id="drawer-prev">上一篇</button>
+            <button class="btn primary next-btn" id="drawer-next"></button>
+          </div>
+        </aside>
+      </section>
+
+      <!-- 状态栏 -->
+      <footer class="statusbar">
+        <span id="status">就绪</span>
+        <span class="progress" id="progress" hidden><i id="bar"></i></span>
+        <span id="summary"></span>
+        <span class="hint" id="hint"></span>
+      </footer>
+    </div>
+
+    <div id="drop-overlay" hidden><div>松开鼠标，开始识别</div></div>
+    <div id="toasts" aria-live="polite"></div>
+  </body>
+</html>
