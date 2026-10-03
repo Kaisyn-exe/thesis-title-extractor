@@ -13,8 +13,8 @@ jobs:
   build-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: npm
@@ -34,3 +34,21 @@ jobs:
             下载 `*_x64-setup.exe` 双击安装即可（推荐）；`*.msi` 适合机房统一部署。
             支持 Windows 10 / 11。
           releaseDraft: false
+      # GitHub 的附件文件名不支持中文（「论文题目提取工具_…」会变成「_…」），
+      # 改成英文文件名，再用中文作为下载页上的显示名称
+      - name: Rename release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" --jq '.assets[] | "\(.id) \(.name)"' |
+          while read -r id name; do
+            case "$name" in
+              *setup.exe) new="thesis-title-extractor_${ver}_x64-setup.exe"; label="论文题目提取工具 v${ver} 安装包（推荐，双击安装）.exe" ;;
+              *.msi)      new="thesis-title-extractor_${ver}_x64_zh-CN.msi"; label="论文题目提取工具 v${ver} MSI 安装包（机房批量部署用）.msi" ;;
+              *) continue ;;
+            esac
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/assets/$id" -f name="$new" -f label="$label" > /dev/null
+          done

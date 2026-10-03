@@ -39,8 +39,8 @@
 
 | 文件 | 说明 |
 | --- | --- |
-| `论文题目提取工具_x.y.z_x64-setup.exe` | **推荐**。双击安装，无需管理员权限 |
-| `论文题目提取工具_x.y.z_x64_zh-CN.msi` | 适合学校机房统一部署 |
+| `thesis-title-extractor_x.y.z_x64-setup.exe` | **推荐**。双击安装，无需管理员权限 |
+| `thesis-title-extractor_x.y.z_x64_zh-CN.msi` | 适合学校机房统一部署 |
 
 支持 Windows 10 / 11。软件依赖系统自带的 WebView2，Windows 10 较老的版本如果缺少，安装程序会自动下载。
 
